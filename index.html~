@@ -1,0 +1,21 @@
+<dialog id="loginDialog">
+  <form  action="javascript:void(0);" id="loginForm">
+        <p>Email: <input name="submitted-name" autocomplete="name" id="emailfield"/></p>
+    <div>
+      <button id="loginButton" value="default">Submit</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="loggedInDialog">
+  <button id="loggedInButton" value="default">Log out</button>
+  <button id="passkeysButton" value="default">Passkeys</button>
+</dialog>
+
+<dialog id="passkeysDialog">
+  <form action="javascript:void(0);" id="passkeysForm">
+    <select id="selectPasskey"></select>
+  </form>
+</dialog>
+  
+<script type="module" src="app.js"></script>

@@ -1,0 +1,158 @@
+import { revokeToken } from './pwless-client/cognito-api.js';
+import { scheduleRefresh, refreshTokens } from './pwless-client/refresh.js';
+import { Passwordless } from './pwless-client/index.js';
+import { requestSignInLink, signInWithLink } from './pwless-client/magic-link.js';
+import { retrieveTokens, storeTokens } from './pwless-client/storage.js';
+import { configure } from './pwless-client/config.js';
+import { fido2CreateCredential, fido2ListCredentials, fido2DeleteCredential } from './pwless-client/fido2.js';
+
+const clientId = '7hvc548je5k1m2161p1vkpslrm';
+const fido2BaseUrl = 'https://4kih2bz83i.execute-api.eu-west-1.amazonaws.com/';
+
+Passwordless.configure({
+    cognitoIdpEndpoint: 'eu-west-1',
+    clientId: clientId,
+    fido2: {
+        baseUrl: fido2BaseUrl,
+        authenticatorSelection: {
+            userVerification: "required",
+        },
+    },
+    debug: console.debug,
+})
+
+
+async function isLoggedInOrNewLogin() {
+    var tokens = await retrieveTokens();
+
+    // If accesstoken etc is expired try to refresh from refreshtoken
+    if (tokens?.refreshToken && tokens?.expireAt <= Date.now()) {
+        refreshFromRefreshToken();
+        location.reload();
+    }
+
+    if (tokens && tokens?.expireAt >= Date.now()) {
+        scheduleTokenRefresh();
+        return true;
+    } else {
+        signInWithLink();
+        return false;
+    }
+    
+}
+
+function scheduleTokenRefresh() {
+    scheduleRefresh({
+        tokensCb: (newTokens) =>
+          newTokens &&
+          storeTokens(newTokens)
+      })
+}
+
+async function refreshFromRefreshToken() {
+    const { clientId, debug, storage } = configure();
+    const tokens = await retrieveTokens();
+    try {
+        await refreshTokens({
+            tokensCb: (newTokens) =>
+            newTokens &&
+            storeTokens(newTokens)
+        })
+    } catch(err) {
+        if (err == 'NotAuthorizedException: Refresh Token has expired') {
+            console.log('Removing expired refresh token');
+            storage.removeItem(`CognitoIdentityServiceProvider.${clientId}.${tokens.username}.refreshToken`);
+        }
+    }
+}
+
+function loginSubmitHandler(evt) {
+	var authenticationData = {
+		email: document.getElementById("emailfield").value,
+	};
+    
+    const { signInLinkRequested } = requestSignInLink({ 
+        usernameOrAlias: authenticationData.email,
+        statusCb: console.log
+    });
+}
+
+async function signOutHandler() {
+    console.log("Signing out");
+    const { clientId, debug, storage } = configure();
+    const tokens = await retrieveTokens();
+  
+    console.log(tokens);
+    storage.removeItem(`CognitoIdentityServiceProvider.${clientId}.${tokens.username}.accessToken`);
+    storage.removeItem(`CognitoIdentityServiceProvider.${clientId}.${tokens.username}.idToken`);
+    storage.removeItem(`CognitoIdentityServiceProvider.${clientId}.${tokens.username}.refreshToken`);
+    storage.removeItem(`CognitoIdentityServiceProvider.${clientId}.${tokens.username}.tokenScopesString`);
+    storage.removeItem(`CognitoIdentityServiceProvider.${clientId}.${tokens.username}.userData`);
+    storage.removeItem(`CognitoIdentityServiceProvider.${clientId}.LastAuthUser`);
+    storage.removeItem(`Passwordless.${clientId}.${tokens.username}.expireAt`);
+    storage.removeItem(`Passwordless.${clientId}.${tokens.username}.refreshTokens`);
+    await revokeToken({
+        abort: undefined, // if we've come this far, let this proceed
+        refreshToken: tokens.refreshToken,
+    });
+    document.location.reload()
+}
+
+async function showPasskeys() {
+    const credentials = await fido2ListCredentials();
+    const select = document.getElementById('selectPasskey');
+    for (var authenticator of credentials.authenticators) {
+        let element = document.createElement('option');
+        element.textContent = `${authenticator.friendlyName}`;
+        select.append(element);
+    }
+    const dialog = document.getElementById('passkeysDialog')
+    addButtonToParrent('Create Passkey', dialog);
+    addButtonToParrent('Back', dialog);
+    
+    const passform = select.parentElement;
+    addButtonToParrent('Delete', passform);
+
+    document.getElementById('loggedInDialog').close();
+    document.getElementById('passkeysDialog').show();
+
+    document.getElementById('CreatePasskey').addEventListener('click', createPasskey);
+    document.getElementById('Delete').addEventListener('click', deletePasskey);
+}
+
+function addButtonToParrent(btnName, parent) {
+    let button = document.createElement('button');
+    button.setAttribute('class', 'btn');
+    button.setAttribute('id', btnName.replaceAll(' ',''));
+    button.textContent = btnName;
+    parent.append(button);
+}
+
+async function createPasskey() {
+    fido2CreateCredential({ friendlyName: 'HasseTest'});
+}
+
+async function deletePasskey() {
+    const select = document.getElementById('selectPasskey');
+    const selected = select.options[select.selectedIndex].text;
+    const authenticators = (await fido2ListCredentials()).authenticators;
+    for (let authenticator of authenticators) {
+        if (authenticator.friendlyName == selected) {
+            fido2DeleteCredential({ credentialId: authenticator.credentialId });
+        }
+    }
+}
+
+document.getElementById('loginForm').addEventListener('submit', loginSubmitHandler);
+document.getElementById('loggedInButton').addEventListener('click', signOutHandler);
+document.getElementById('passkeysButton').addEventListener('click', showPasskeys);
+
+if (await isLoggedInOrNewLogin()) {
+    document.getElementById('loginDialog').close();
+    document.getElementById('loggedInDialog').show();
+} else {
+    document.getElementById('loggedInDialog').close();
+    document.getElementById('loginDialog').show();
+}
+
+console.log(`Login status: ${await isLoggedInOrNewLogin()}`);
